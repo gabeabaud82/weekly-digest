@@ -1,0 +1,31 @@
+name: Weekly Kindle Digest
+
+on:
+  schedule:
+    # Runs at 4:00 AM PDT (11:00 UTC) every Saturday
+    - cron: '0 11 * * 6'
+  workflow_dispatch:
+
+jobs:
+  build-and-send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests urllib3 ebooklib Pillow
+
+      - name: Run script
+        env:
+          READWISE_TOKEN: ${{ secrets.READWISE_TOKEN }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+          KINDLE_EMAIL: ${{ secrets.KINDLE_EMAIL }}
+        run: python weekly_digest.py
