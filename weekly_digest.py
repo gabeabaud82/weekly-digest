@@ -39,7 +39,6 @@ def fetch_weekly_articles():
             title = art.get('title', 'Unknown Title')
             print(f" -> Fetching full HTML for: {title}")
             
-            # Pass 2: Fetch the full payload using the document ID
             detail = requests.get(URL, headers=HEADERS, params={'id': art['id'], 'withHtmlContent': 'true'}, verify=False)
             if detail.status_code == 200:
                 full_data = detail.json().get('results', [{}])[0]
@@ -83,7 +82,6 @@ def generate_cover(articles):
                 continue
                 
     if header_img:
-        # Convert cover to Grayscale to save space
         header_img = header_img.convert('L')
         img.paste(header_img, (0, 0))
         y_offset = 390
@@ -110,7 +108,6 @@ def generate_cover(articles):
         d.text((40, y_text), f"• {clean_title}", fill=(50, 50, 50), font=font_list)
         y_text += 30
         
-    # Compress cover aggressively
     img.save('weekly_cover.jpg', optimize=True, quality=60)
 
 def package_to_epub(articles):
@@ -120,52 +117,63 @@ def package_to_epub(articles):
     book.set_title(f"Weekly Digest - {datetime.now().strftime('%b %d, %Y')}")
     book.set_language('en')
     
-    # Attach the Custom Cover
     generate_cover(articles)
     with open('weekly_cover.jpg', 'rb') as cover_file:
         book.set_cover("cover.jpg", cover_file.read())
         
     toc_html = "<h1>Table of Contents</h1><ul>"
     chapters = []
-    image_counter = 0
+    global_image_counter = 0
     
     for i, art in enumerate(articles):
         title = art.get('title', 'Untitled')
         author = art.get('author', 'Unknown Author')
         content = art.get('html_content', '')
         
-        # Add to the TOC list
         toc_html += f'<li><a href="chap_{i}.xhtml">{title}</a></li>'
         
-        # Nuke hidden Base64 image data that bloats the HTML text
+        # AGGRESSIVE SCRUBBER: Nuke SVGs, Styles, Scripts, and inline data limits
+        content = re.sub(r'<svg.*?>.*?</svg>', '', content, flags=re.IGNORECASE | re.DOTALL)
+        content = re.sub(r'<style.*?>.*?</style>', '', content, flags=re.IGNORECASE | re.DOTALL)
+        content = re.sub(r'<script.*?>.*?</script>', '', content, flags=re.IGNORECASE | re.DOTALL)
+        content = re.sub(r'srcset="[^"]+"', '', content, flags=re.IGNORECASE)
+        content = re.sub(r'data-src="[^"]+"', '', content, flags=re.IGNORECASE)
         content = re.sub(r'src="data:image/[^"]+"', 'src=""', content, flags=re.IGNORECASE)
         
-        # Find and embed external images, converting to B&W
-        img_urls = re.findall(r'src="([^"]+)"', content, re.IGNORECASE)
+        img_urls = re.findall(r'<img[^>]+src="([^"]+)"', content, re.IGNORECASE)
+        article_image_count = 0
+        
         for img_url in set(img_urls):
             if not img_url.startswith('http'):
                 continue
+                
+            # Cap at 10 images per article
+            if article_image_count >= 10:
+                content = content.replace(img_url, "")
+                continue
+                
             try:
                 img_resp = requests.get(img_url, timeout=5)
                 if img_resp.status_code == 200:
-                    img_obj = Image.open(BytesIO(img_resp.content))
+                    img_obj = Image.open(BytesIO(img_resp.content)).convert('L')
                     
-                    # Convert to Grayscale ('L' mode) to obliterate file size
-                    img_obj = img_obj.convert('L')
-                    
-                    # Shrink large images to fit Kindle width
-                    max_width = 600
+                    # Shrink to 400px width max
+                    max_width = 400
                     if img_obj.width > max_width:
                         ratio = max_width / img_obj.width
                         new_h = int(img_obj.height * ratio)
                         img_obj = img_obj.resize((max_width, new_h), Image.Resampling.LANCZOS)
                         
-                    # Compress the image data aggressively
                     output_io = BytesIO()
-                    img_obj.save(output_io, format='JPEG', quality=60, optimize=True)
+                    img_obj.save(output_io, format='JPEG', quality=50, optimize=True)
                     compressed_content = output_io.getvalue()
                     
-                    img_name = f"embedded_img_{image_counter}.jpg"
+                    # Failsafe: Drop image if it's still suspiciously large (>150KB)
+                    if len(compressed_content) > 150000:
+                        content = content.replace(img_url, "")
+                        continue
+                    
+                    img_name = f"img_{global_image_counter}.jpg"
                     img_item = epub.EpubItem(
                         uid=img_name, 
                         file_name=f"images/{img_name}", 
@@ -174,11 +182,12 @@ def package_to_epub(articles):
                     )
                     book.add_item(img_item)
                     content = content.replace(img_url, f"images/{img_name}")
-                    image_counter += 1
+                    
+                    global_image_counter += 1
+                    article_image_count += 1
             except Exception:
                 pass 
                 
-        # Build the chapter
         c = epub.EpubHtml(title=title, file_name=f'chap_{i}.xhtml', lang='en')
         c.content = f"<h2>{title}</h2><p><b>By {author}</b></p>{content}"
         book.add_item(c)
@@ -198,13 +207,9 @@ def package_to_epub(articles):
 def send_to_kindle():
     print(f"\nPreparing to deliver 'weekly_digest.epub' to {KINDLE_EMAIL}...")
     
-    # Log the final file size to the terminal
     file_size_mb = os.path.getsize('weekly_digest.epub') / (1024 * 1024)
     print(f"Final EPUB Size: {file_size_mb:.2f} MB")
     
-    if file_size_mb > 24.0:
-        print("WARNING: File size is dangerously close to or exceeding Google's 25MB limit!")
-        
     msg = EmailMessage()
     msg['Subject'] = 'Convert'
     msg['From'] = SENDER_EMAIL
