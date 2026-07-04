@@ -2,7 +2,7 @@ import requests
 import urllib3
 from datetime import datetime, timedelta, timezone
 import os
-import re  # <--- Add this missing line right here!
+import re
 from ebooklib import epub
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
@@ -23,16 +23,13 @@ HEADERS = {'Authorization': f'Token {TOKEN}'}
 
 def fetch_weekly_articles():
     print("Fetching saved articles from the last 7 days...")
-    
     seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-    
-    # Pass 1: Ask Readwise only for items updated in the last week
     resp = requests.get(URL, headers=HEADERS, params={'updated__gt': seven_days_ago}, verify=False)
     
     if resp.status_code != 200:
         print(f"API Error: {resp.status_code}")
         return []
-        
+    
     articles = resp.json().get('results', [])
     matched_articles = []
     
@@ -47,18 +44,17 @@ def fetch_weekly_articles():
             if detail.status_code == 200:
                 full_data = detail.json().get('results', [{}])[0]
                 art['html_content'] = full_data.get('html_content') or full_data.get('summary') or "No content available."
-                # Capture the image URL if Readwise grabbed one
                 art['image_url'] = full_data.get('image_url') or art.get('image_url')
                 matched_articles.append(art)
-            
+                
     return matched_articles
 
 def generate_cover(articles):
     print("\nDrawing custom cover with article artwork...")
     img = Image.new('RGB', (600, 800), color=(244, 244, 245))
     d = ImageDraw.Draw(img)
-    
     header_img = None
+    
     for art in articles:
         img_url = art.get('image_url')
         if img_url and img_url.startswith('http'):
@@ -67,7 +63,6 @@ def generate_cover(articles):
                 img_resp = requests.get(img_url, timeout=10)
                 if img_resp.status_code == 200:
                     downloaded_img = Image.open(BytesIO(img_resp.content)).convert('RGB')
-                    
                     target_width, target_height = 600, 350
                     img_ratio = downloaded_img.width / downloaded_img.height
                     target_ratio = target_width / target_height
@@ -86,20 +81,20 @@ def generate_cover(articles):
             except Exception as e:
                 print(f" -> Could not load image: {e}")
                 continue
-
+                
     if header_img:
         img.paste(header_img, (0, 0))
-        y_offset = 390 
+        y_offset = 390
     else:
-        y_offset = 40 
-
+        y_offset = 40
+        
     try:
         font_title = ImageFont.truetype("Impact.ttf", 46)
         font_date = ImageFont.truetype("Arial.ttf", 20)
         font_list = ImageFont.truetype("Arial.ttf", 16)
     except IOError:
         font_title = font_date = font_list = ImageFont.load_default()
-
+        
     d.text((40, y_offset), "WEEKLY ARTICLE DIGEST", fill=(17, 17, 17), font=font_title)
     d.text((40, y_offset + 60), datetime.now().strftime("%A, %B %d, %Y").upper(), fill=(100, 100, 100), font=font_date)
     d.line([(40, y_offset + 95), (560, y_offset + 95)], fill=(0, 0, 0), width=3)
@@ -107,9 +102,7 @@ def generate_cover(articles):
     y_text = y_offset + 125
     for art in articles[:8]:
         raw_title = art.get('title', 'Untitled')
-        # Clean the publisher from the title for the cover
         clean_title = raw_title.split(' | ')[0].split(' - ')[0].strip()
-        
         if len(clean_title) > 42:
             clean_title = clean_title[:39] + "..."
         d.text((40, y_text), f"• {clean_title}", fill=(50, 50, 50), font=font_list)
@@ -123,60 +116,77 @@ def package_to_epub(articles):
     book.set_identifier('weekly_readwise_digest')
     book.set_title(f"Weekly Digest - {datetime.now().strftime('%b %d, %Y')}")
     book.set_language('en')
-
+    
     # Attach the Custom Cover
     generate_cover(articles)
     with open('weekly_cover.jpg', 'rb') as cover_file:
         book.set_cover("cover.jpg", cover_file.read())
-
+        
     # Build the Custom Table of Contents HTML
-    toc_html = "<h1>Table of Contents</h1><ul style='line-height: 1.8;'>"
+    toc_html = "<h1>Table of Contents</h1><ul>"
     chapters = []
     image_counter = 0
-
+    
     for i, art in enumerate(articles):
         title = art.get('title', 'Untitled')
         author = art.get('author', 'Unknown Author')
         content = art.get('html_content', '')
         
         # Add to the TOC list
-        toc_html += f"<li><a href='chap_{i}.xhtml'>{title}</a></li>"
-
-        # Find and embed all images so Kindle doesn't strip them
-        img_urls = re.findall(r'src=["\'](http[^"\']+)["\']', content, re.IGNORECASE)
-        for img_url in set(img_urls): # use set to avoid downloading duplicates
+        toc_html += f'<li><a href="chap_{i}.xhtml">{title}</a></li>'
+        
+        # Find and embed all images, resizing to prevent massive file bloat
+        img_urls = re.findall(r'src="([^"]+)"', content, re.IGNORECASE)
+        for img_url in set(img_urls):
             try:
                 img_resp = requests.get(img_url, timeout=5)
                 if img_resp.status_code == 200:
+                    img_obj = Image.open(BytesIO(img_resp.content))
+                    
+                    # Convert to RGB to prevent transparency issues
+                    if img_obj.mode != 'RGB':
+                        img_obj = img_obj.convert('RGB')
+                    
+                    # Shrink large images to fit Kindle width
+                    max_width = 800
+                    if img_obj.width > max_width:
+                        ratio = max_width / img_obj.width
+                        new_h = int(img_obj.height * ratio)
+                        img_obj = img_obj.resize((max_width, new_h), Image.Resampling.LANCZOS)
+                        
+                    # Compress the image data
+                    output_io = BytesIO()
+                    img_obj.save(output_io, format='JPEG', quality=70)
+                    compressed_content = output_io.getvalue()
+                    
                     img_name = f"embedded_img_{image_counter}.jpg"
                     img_item = epub.EpubItem(
                         uid=img_name, 
                         file_name=f"images/{img_name}", 
                         media_type="image/jpeg", 
-                        content=img_resp.content
+                        content=compressed_content
                     )
                     book.add_item(img_item)
                     # Replace the web URL with the local EPUB image path
                     content = content.replace(img_url, f"images/{img_name}")
                     image_counter += 1
             except Exception:
-                pass # If an image fails, just ignore it and keep building
-        
+                pass 
+                
         # Build the chapter
         c = epub.EpubHtml(title=title, file_name=f'chap_{i}.xhtml', lang='en')
-        c.content = f"<h2>{title}</h2><h4>By {author}</h4><hr/><div>{content}</div>"
+        c.content = f"<h2>{title}</h2><p><b>By {author}</b></p>{content}"
         book.add_item(c)
         chapters.append(c)
-
+        
     # Finalize the TOC Chapter
     toc_html += "</ul>"
     toc_chapter = epub.EpubHtml(title='Table of Contents', file_name='toc.xhtml', lang='en')
     toc_chapter.content = toc_html
     book.add_item(toc_chapter)
-
+    
     # Flat structure: TOC first, then the chapters
     book.spine = [toc_chapter] + chapters
-    
     epub.write_epub('weekly_digest.epub', book, {})
     
     if os.path.exists('weekly_cover.jpg'):
@@ -188,13 +198,12 @@ def send_to_kindle():
     msg['Subject'] = 'Convert'
     msg['From'] = SENDER_EMAIL
     msg['To'] = KINDLE_EMAIL
-
+    
     try:
         with open('weekly_digest.epub', 'rb') as f:
             file_data = f.read()
-        
         msg.add_attachment(file_data, maintype='application', subtype='epub+zip', filename='weekly_digest.epub')
-
+        
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(SENDER_EMAIL, APP_PASSWORD)
             smtp.send_message(msg)
