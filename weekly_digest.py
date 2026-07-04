@@ -83,6 +83,8 @@ def generate_cover(articles):
                 continue
                 
     if header_img:
+        # Convert cover to Grayscale to save space
+        header_img = header_img.convert('L')
         img.paste(header_img, (0, 0))
         y_offset = 390
     else:
@@ -108,7 +110,8 @@ def generate_cover(articles):
         d.text((40, y_text), f"• {clean_title}", fill=(50, 50, 50), font=font_list)
         y_text += 30
         
-    img.save('weekly_cover.jpg')
+    # Compress cover aggressively
+    img.save('weekly_cover.jpg', optimize=True, quality=60)
 
 def package_to_epub(articles):
     print("Stitching text, embedding images, and building EPUB...")
@@ -122,7 +125,6 @@ def package_to_epub(articles):
     with open('weekly_cover.jpg', 'rb') as cover_file:
         book.set_cover("cover.jpg", cover_file.read())
         
-    # Build the Custom Table of Contents HTML
     toc_html = "<h1>Table of Contents</h1><ul>"
     chapters = []
     image_counter = 0
@@ -135,28 +137,32 @@ def package_to_epub(articles):
         # Add to the TOC list
         toc_html += f'<li><a href="chap_{i}.xhtml">{title}</a></li>'
         
-        # Find and embed all images, resizing to prevent massive file bloat
+        # Nuke hidden Base64 image data that bloats the HTML text
+        content = re.sub(r'src="data:image/[^"]+"', 'src=""', content, flags=re.IGNORECASE)
+        
+        # Find and embed external images, converting to B&W
         img_urls = re.findall(r'src="([^"]+)"', content, re.IGNORECASE)
         for img_url in set(img_urls):
+            if not img_url.startswith('http'):
+                continue
             try:
                 img_resp = requests.get(img_url, timeout=5)
                 if img_resp.status_code == 200:
                     img_obj = Image.open(BytesIO(img_resp.content))
                     
-                    # Convert to RGB to prevent transparency issues
-                    if img_obj.mode != 'RGB':
-                        img_obj = img_obj.convert('RGB')
+                    # Convert to Grayscale ('L' mode) to obliterate file size
+                    img_obj = img_obj.convert('L')
                     
                     # Shrink large images to fit Kindle width
-                    max_width = 800
+                    max_width = 600
                     if img_obj.width > max_width:
                         ratio = max_width / img_obj.width
                         new_h = int(img_obj.height * ratio)
                         img_obj = img_obj.resize((max_width, new_h), Image.Resampling.LANCZOS)
                         
-                    # Compress the image data
+                    # Compress the image data aggressively
                     output_io = BytesIO()
-                    img_obj.save(output_io, format='JPEG', quality=70)
+                    img_obj.save(output_io, format='JPEG', quality=60, optimize=True)
                     compressed_content = output_io.getvalue()
                     
                     img_name = f"embedded_img_{image_counter}.jpg"
@@ -167,7 +173,6 @@ def package_to_epub(articles):
                         content=compressed_content
                     )
                     book.add_item(img_item)
-                    # Replace the web URL with the local EPUB image path
                     content = content.replace(img_url, f"images/{img_name}")
                     image_counter += 1
             except Exception:
@@ -179,13 +184,11 @@ def package_to_epub(articles):
         book.add_item(c)
         chapters.append(c)
         
-    # Finalize the TOC Chapter
     toc_html += "</ul>"
     toc_chapter = epub.EpubHtml(title='Table of Contents', file_name='toc.xhtml', lang='en')
     toc_chapter.content = toc_html
     book.add_item(toc_chapter)
     
-    # Flat structure: TOC first, then the chapters
     book.spine = [toc_chapter] + chapters
     epub.write_epub('weekly_digest.epub', book, {})
     
@@ -194,6 +197,14 @@ def package_to_epub(articles):
 
 def send_to_kindle():
     print(f"\nPreparing to deliver 'weekly_digest.epub' to {KINDLE_EMAIL}...")
+    
+    # Log the final file size to the terminal
+    file_size_mb = os.path.getsize('weekly_digest.epub') / (1024 * 1024)
+    print(f"Final EPUB Size: {file_size_mb:.2f} MB")
+    
+    if file_size_mb > 24.0:
+        print("WARNING: File size is dangerously close to or exceeding Google's 25MB limit!")
+        
     msg = EmailMessage()
     msg['Subject'] = 'Convert'
     msg['From'] = SENDER_EMAIL
