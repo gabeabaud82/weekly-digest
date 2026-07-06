@@ -23,29 +23,38 @@ HEADERS = {'Authorization': f'Token {TOKEN}'}
 
 def fetch_weekly_articles():
     print("Fetching saved articles from the last 14 days...")
-    fourteen_days_ago = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-    resp = requests.get(URL, headers=HEADERS, params={'updated__gt': fourteen_days_ago}, verify=False)
+    date_str = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
     
-    if resp.status_code != 200:
-        print(f"API Error: {resp.status_code}")
-        return []
-    
-    articles = resp.json().get('results', [])
+    # Iterate across all common active locations to target all document paths
+    locations = ['new', 'later', 'feed']
     matched_articles = []
+    seen_ids = set()
     
     print("\n--- Processing Weekly Articles ---")
-    for art in articles:
-        if art.get('category') == 'article' or 'weekly' in art.get('tags', []):
-            title = art.get('title', 'Unknown Title')
-            print(f" -> Fetching full HTML for: {title}")
+    for loc in locations:
+        resp = requests.get(URL, headers=HEADERS, params={'updatedAfter': date_str, 'location': loc}, verify=False)
+        
+        if resp.status_code != 200:
+            print(f"API Error ({loc}): {resp.status_code}")
+            continue
             
-            detail = requests.get(URL, headers=HEADERS, params={'id': art['id'], 'withHtmlContent': 'true'}, verify=False)
-            if detail.status_code == 200:
-                full_data = detail.json().get('results', [{}])[0]
-                art['html_content'] = full_data.get('html_content') or full_data.get('summary') or "No content available."
-                art['image_url'] = full_data.get('image_url') or art.get('image_url')
-                matched_articles.append(art)
+        articles = resp.json().get('results', [])
+        for art in articles:
+            if art['id'] in seen_ids:
+                continue
                 
+            if art.get('category') == 'article' or 'weekly' in art.get('tags', []):
+                title = art.get('title', 'Unknown Title')
+                print(f" -> Fetching full HTML for: {title}")
+                
+                detail = requests.get(URL, headers=HEADERS, params={'id': art['id'], 'withHtmlContent': 'true'}, verify=False)
+                if detail.status_code == 200:
+                    full_data = detail.json().get('results', [{}])[0]
+                    art['html_content'] = full_data.get('html_content') or full_data.get('summary') or "No content available."
+                    art['image_url'] = full_data.get('image_url') or art.get('image_url')
+                    matched_articles.append(art)
+                    seen_ids.add(art['id'])
+                    
     return matched_articles
 
 def generate_cover(articles):
@@ -132,7 +141,6 @@ def package_to_epub(articles):
         
         toc_html += f'<li><a href="chap_{i}.xhtml">{title}</a></li>'
         
-        # AGGRESSIVE SCRUBBER: Nuke SVGs, Styles, Scripts, and inline data limits
         content = re.sub(r'<svg.*?>.*?</svg>', '', content, flags=re.IGNORECASE | re.DOTALL)
         content = re.sub(r'<style.*?>.*?</style>', '', content, flags=re.IGNORECASE | re.DOTALL)
         content = re.sub(r'<script.*?>.*?</script>', '', content, flags=re.IGNORECASE | re.DOTALL)
@@ -147,7 +155,6 @@ def package_to_epub(articles):
             if not img_url.startswith('http'):
                 continue
                 
-            # Cap at 10 images per article
             if article_image_count >= 10:
                 content = content.replace(img_url, "")
                 continue
@@ -157,7 +164,6 @@ def package_to_epub(articles):
                 if img_resp.status_code == 200:
                     img_obj = Image.open(BytesIO(img_resp.content)).convert('L')
                     
-                    # Shrink to 400px width max
                     max_width = 400
                     if img_obj.width > max_width:
                         ratio = max_width / img_obj.width
@@ -168,7 +174,6 @@ def package_to_epub(articles):
                     img_obj.save(output_io, format='JPEG', quality=50, optimize=True)
                     compressed_content = output_io.getvalue()
                     
-                    # Failsafe: Drop image if it's still suspiciously large (>150KB)
                     if len(compressed_content) > 150000:
                         content = content.replace(img_url, "")
                         continue
