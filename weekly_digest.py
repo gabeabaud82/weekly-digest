@@ -22,9 +22,9 @@ URL = 'https://readwise.io/api/v3/list/'
 HEADERS = {'Authorization': f'Token {TOKEN}'}
 
 def fetch_weekly_articles():
-    print("Fetching saved articles from the last 7 days...")
-    seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-    resp = requests.get(URL, headers=HEADERS, params={'updated__gt': seven_days_ago}, verify=False)
+    print("Fetching saved articles from the last 14 days...")
+    fourteen_days_ago = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+    resp = requests.get(URL, headers=HEADERS, params={'updated__gt': fourteen_days_ago}, verify=False)
     
     if resp.status_code != 200:
         print(f"API Error: {resp.status_code}")
