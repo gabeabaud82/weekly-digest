@@ -35,7 +35,7 @@ def fetch_weekly_articles():
     
     print("\n--- Processing Weekly Articles ---")
     for art in articles:
-        if art.get('category') == 'article':
+        if art.get('category') == 'article' or 'weekly' in art.get('tags', []):
             title = art.get('title', 'Unknown Title')
             print(f" -> Fetching full HTML for: {title}")
             
