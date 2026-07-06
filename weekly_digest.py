@@ -22,8 +22,8 @@ URL = 'https://readwise.io/api/v3/list/'
 HEADERS = {'Authorization': f'Token {TOKEN}'}
 
 def fetch_weekly_articles():
-    print("Fetching saved articles from the last 14 days...")
-    date_str = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+    print("Fetching saved articles from the last 7 days...")
+    date_str = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     
     # Iterate across all common active locations to target all document paths
     locations = ['new', 'later', 'feed']
