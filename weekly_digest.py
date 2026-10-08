@@ -22,15 +22,15 @@ URL = 'https://readwise.io/api/v3/list/'
 HEADERS = {'Authorization': f'Token {TOKEN}'}
 
 def fetch_weekly_articles():
-    print("Fetching saved articles from the last 7 days...")
-    date_str = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    # Updated to a 3-day lookback to match the 3x/week schedule
+    print("Fetching saved articles from the last 3 days...")
+    date_str = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
     
-    # Iterate across all common active locations to target all document paths
     locations = ['new', 'later', 'feed']
     matched_articles = []
     seen_ids = set()
     
-    print("\n--- Processing Weekly Articles ---")
+    print("\n--- Processing Articles ---")
     for loc in locations:
         resp = requests.get(URL, headers=HEADERS, params={'updatedAfter': date_str, 'location': loc}, verify=False)
         
@@ -104,7 +104,7 @@ def generate_cover(articles):
     except IOError:
         font_title = font_date = font_list = ImageFont.load_default()
         
-    d.text((40, y_offset), "WEEKLY ARTICLE DIGEST", fill=(17, 17, 17), font=font_title)
+    d.text((40, y_offset), "ARTICLE DIGEST", fill=(17, 17, 17), font=font_title)
     d.text((40, y_offset + 60), datetime.now().strftime("%A, %B %d, %Y").upper(), fill=(100, 100, 100), font=font_date)
     d.line([(40, y_offset + 95), (560, y_offset + 95)], fill=(0, 0, 0), width=3)
     
@@ -122,8 +122,8 @@ def generate_cover(articles):
 def package_to_epub(articles):
     print("Stitching text, embedding images, and building EPUB...")
     book = epub.EpubBook()
-    book.set_identifier('weekly_readwise_digest')
-    book.set_title(f"Weekly Digest - {datetime.now().strftime('%b %d, %Y')}")
+    book.set_identifier('readwise_digest')
+    book.set_title(f"Digest - {datetime.now().strftime('%b %d, %Y')}")
     book.set_language('en')
     
     generate_cover(articles)
